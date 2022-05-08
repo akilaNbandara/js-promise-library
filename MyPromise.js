@@ -130,12 +130,23 @@ class MyPromise {
 
   catch(cb) {
     // The catch methods handle in the then. 
-    this.then(null, cb);
+    // catch also returned a promise
+    return this.then(null, cb);
   }
 
   finally(cb) {
-    cb();
-    return this;
+    // Finally also returning a new promise
+    // but previous thenCb returned value not pass into finally handler
+    // But value can be returned in to post then/catch handlers
+    // p.then(v => r).finally(cb).then(r => q) 
+
+    return this.then((value) => {
+      cb();
+      return value; // This will be pass to post then/catch handlers
+    }, (error) => {
+      cb();
+      throw error; // This will be pass to post then/catch handlers
+    });
   }
 
   static resolve() {}
