@@ -62,6 +62,9 @@ class MyPromise {
     this.#state = STATES.REJECTED;
     this.#value = error;
 
+    if (this.#catchCbs.length === 0) {
+      throw new UncaughtPromiseError("Unhandle catch");
+    }
     this.#runCallbacks(this.#catchCbs);
   }
 
@@ -163,3 +166,11 @@ class MyPromise {
 }
 
 module.exports = MyPromise;
+
+class UncaughtPromiseError extends Error {
+  constructor(value) {
+    super();
+    this.message = value;
+    this.stack = 'in my promise: ' + this.stack
+  }
+}
