@@ -1,212 +1,283 @@
-const STATE = {
-  FULFILLED: "fulfilled",
-  REJECTED: "rejected",
-  PENDING: "pending",
-}
+// Usage of Promises
+/*
+  const otherTask = new Promise((res, rej) => {
+    someTask().then(res).catch(rej);
+    // or
+    someTask((result, error) => {
+      if (error) return rej();
+      else return res();
+    });
+  });
+
+  // Chaining 
+  otherTask.then(cb1).catch(eh).then(cb2)
+
+ */
+
+// Promise states
+/*
+  fulfilled: Action related to the promise succeeded.
+  rejected: Action related to the promise failed.
+  pending: Promise is still pending i.e. not fulfilled or rejected yet.
+  settled: Promise has fulfilled or rejected.
+ */
+
+const STATES = {
+  FULFILLED: "FULFILED",
+  REJECTED: "REJECTED",
+  PENDING: "PENDING",
+  SETTLED: "SETTLED",
+};
 
 class MyPromise {
-  #thenCbs = []
-  #catchCbs = []
-  #state = STATE.PENDING
-  #value
-  #onSuccessBind = this.#onSuccess.bind(this)
-  #onFailBind = this.#onFail.bind(this)
+  #state = STATES.PENDING;
+  #value;
 
-  constructor(cb) {
+  constructor(resolver) {
     try {
-      cb(this.#onSuccessBind, this.#onFailBind)
+      resolver(this.#onSuccess, this.#onFailed);
+      // Whenever created a promice it will automaticaly called the resolver cb function
     } catch (e) {
-      this.#onFail(e)
+      // Promice got rejected when there is runtime erro.
+      this.#onFailed(e);
     }
   }
 
-  #runCallbacks() {
-    if (this.#state === STATE.FULFILLED) {
-      this.#thenCbs.forEach(callback => {
-        callback(this.#value)
-      })
+  #onSuccess = (value) => {
+    // The resolve method should only called for 1 time.
+    // Promise is in the PENDING state when it settled for first time.
+    // When resolve method get called in the first time the promice obj state will get updated.
+    // If not in the pending state resolve method just returned without executing the body.
+    if (this.#state !== STATES.PENDING) return;
 
-      this.#thenCbs = []
+    if (value instanceof MyPromise) {
+      // If resolve called with another promise
+      value.then(this.#onSuccess, this.#onFailed);
+      return;
     }
 
-    if (this.#state === STATE.REJECTED) {
-      this.#catchCbs.forEach(callback => {
-        callback(this.#value)
-      })
+    this.#state = STATES.FULFILLED;
+    this.#value = value;
 
-      this.#catchCbs = []
+    this.#runCallbacks(this.#thenCbs);
+  };
+
+  #onFailed = (error) => {
+    if (this.#state !== STATES.PENDING) return;
+
+    if (error instanceof MyPromise) {
+      // If resolve called with another promise
+      value.then(this.#onSuccess, this.#onFailed);
+      return;
+    }
+
+    this.#state = STATES.REJECTED;
+    this.#value = error;
+
+    if (this.#catchCbs.length === 0) {
+      throw new UncaughtPromiseError("Unhandle catch");
+    }
+    this.#runCallbacks(this.#catchCbs);
+  };
+
+  #thenCbs = [];
+  #catchCbs = [];
+
+  // Iterate and call callbacks of array.
+  #runCallbacks(cbArray) {
+    while (cbArray.length > 0) {
+      const cb = cbArray.pop();
+      cb(this.#value);
     }
   }
 
-  #onSuccess(value) {
-    queueMicrotask(() => {
-      if (this.#state !== STATE.PENDING) return
-
-      if (value instanceof MyPromise) {
-        value.then(this.#onSuccessBind, this.#onFailBind)
-        return
-      }
-
-      this.#value = value
-      this.#state = STATE.FULFILLED
-      this.#runCallbacks()
-    })
-  }
-
-  #onFail(value) {
-    queueMicrotask(() => {
-      if (this.#state !== STATE.PENDING) return
-
-      if (value instanceof MyPromise) {
-        value.then(this.#onSuccessBind, this.#onFailBind)
-        return
-      }
-
-      if (this.#catchCbs.length === 0) {
-        throw new UncaughtPromiseError(value)
-      }
-
-      this.#value = value
-      this.#state = STATE.REJECTED
-      this.#runCallbacks()
-    })
-  }
-
+  // Handle then method in promise object
   then(thenCb, catchCb) {
+    // Returning promise to chaining
+    // Call resolve and reject returned Promise after calling prior then callbacks
     return new MyPromise((resolve, reject) => {
-      this.#thenCbs.push(result => {
-        if (thenCb == null) {
-          resolve(result)
-          return
+      this.#thenCbs.push((result) => {
+        if (!thenCb) {
+          // If there is no then call back that means it a catch handler
+          // somePromise.catch(eh).then(cb)
+          resolve(result);
+          return;
         }
 
         try {
-          resolve(thenCb(result))
-        } catch (error) {
-          reject(error)
+          // Returning prior thenCb return values to later handler.
+          // somePromise.then(r => change(r)).then(cb)
+          resolve(thenCb(result));
+        } catch (e) {
+          // If failed execution of thenCb or resolveCb will reject the returned promise.
+          // It will hit later catch
+          // somePromise.then(method).then(exception).catch();
+          reject(e);
         }
-      })
+      });
 
-      this.#catchCbs.push(result => {
-        if (catchCb == null) {
-          reject(result)
-          return
+      // Create new catch callback to pass results to post handlers
+      this.#catchCbs.push((result) => {
+        if (!catchCb) {
+          // If there is no catch callback on exception of resolver, it will reject chained promise
+          reject(result);
+          return;
         }
 
         try {
-          resolve(catchCb(result))
-        } catch (error) {
-          reject(error)
+          // When there is catchCb and prior resolver got exception.
+          // catch handler handle the exception and chained resolver get called.
+          resolve(catchCb(result));
+        } catch (e) {
+          reject(e);
         }
-      })
+      });
 
-      this.#runCallbacks()
-    })
+      // Check whether the Promise is already settled
+      // Otherwise it will start to execute the callback Arrays
+      if (this.#state === STATES.FULFILLED) {
+        this.#runCallbacks(this.#thenCbs);
+      } else if (this.#state === STATES.REJECTED) {
+        this.#runCallbacks(this.#catchCbs);
+      }
+    });
   }
 
   catch(cb) {
-    return this.then(undefined, cb)
+    // The catch methods handle in the then.
+    // catch also returned a promise
+    return this.then(null, cb);
   }
 
   finally(cb) {
+    // Finally also returning a new promise
+    // but previous thenCb returned value not pass into finally handler
+    // But value can be returned in to post then/catch handlers
+    // p.then(v => r).finally(cb).then(r => q)
+
     return this.then(
-      result => {
-        cb()
-        return result
+      (value) => {
+        cb();
+        return value; // This will be pass to post then/catch handlers
       },
-      result => {
-        cb()
-        throw result
+      (error) => {
+        cb();
+        throw error; // This will be pass to post then/catch handlers
       }
-    )
+    );
   }
 
   static resolve(value) {
-    return new Promise(resolve => {
-      resolve(value)
-    })
+    // Just create new promise and resolve that using given value.
+
+    return new MyPromise((resolve) => {
+      resolve(value);
+    });
   }
 
-  static reject(value) {
-    return new Promise((resolve, reject) => {
-      reject(value)
-    })
-  }
+  static reject(error) {
+    // Just create a new promise and reject that.
 
-  static all(promises) {
-    const results = []
-    let completedPromises = 0
     return new MyPromise((resolve, reject) => {
-      for (let i = 0; i < promises.length; i++) {
-        const promise = promises[i]
+      reject(error);
+    });
+  }
+
+  static all(promiseArray) {
+    // Promise all get resolved when all promises in the promise array get fullfiled.
+    // If anyone got rejected it will got rejected.
+
+    return new MyPromise((resolve, reject) => {
+      const results = [];
+      let resultCount = 0;
+
+      promiseArray.forEach((promise, index) => {
         promise
-          .then(value => {
-            completedPromises++
-            results[i] = value
-            if (completedPromises === promises.length) {
-              resolve(results)
+          .then((value) => {
+            results[index] = value;
+            resultCount += 1;
+
+            if (resultCount === promiseArray.length) {
+              resolve(results);
             }
           })
-          .catch(reject)
-      }
-    })
+          .catch((e) => {
+            reject(e);
+          });
+      });
+    });
   }
 
-  static allSettled(promises) {
-    const results = []
-    let completedPromises = 0
-    return new MyPromise(resolve => {
-      for (let i = 0; i < promises.length; i++) {
-        const promise = promises[i]
+  static allSettled(promiseArray) {
+    // Allsettled resolved after each and every promise get settled
+    // After all settled promise resolved with the status array
+    return new MyPromise((resolve) => {
+      const results = [];
+      let resultCount = 0;
+
+      promiseArray.forEach((promise, index) => {
+        resultCount++;
         promise
-          .then(value => {
-            results[i] = { status: STATE.FULFILLED, value }
-          })
-          .catch(reason => {
-            results[i] = { status: STATE.REJECTED, reason }
-          })
-          .finally(() => {
-            completedPromises++
-            if (completedPromises === promises.length) {
-              resolve(results)
+          .then((value) => {
+            results[index] = { status: "fulfilled", value: value };
+
+            if (resultCount === promiseArray.length) {
+              resolve(results);
             }
           })
-      }
-    })
+          .catch((e) => {
+            results[index] = { status: "rejected", reason: e };
+
+            if (resultCount === promiseArray.length) {
+              resolve(results);
+            }
+          });
+      });
+    });
   }
 
-  static race(promises) {
+  static race(promiseArray) {
+    // Resolve or reject according to which is hit first
     return new MyPromise((resolve, reject) => {
-      promises.forEach(promise => {
-        promise.then(resolve).catch(reject)
-      })
-    })
+      promiseArray.forEach((promise) => {
+        promise
+          .then(resolve)
+          .catch(reject);
+      });
+    });
   }
 
-  static any(promises) {
-    const errors = []
-    let rejectedPromises = 0
+  static any(promiseArray) {
+    // Resolve if any promise got resolved
+    // Reject if no any promises get resolved
     return new MyPromise((resolve, reject) => {
-      for (let i = 0; i < promises.length; i++) {
-        const promise = promises[i]
-        promise.then(resolve).catch(value => {
-          rejectedPromises++
-          errors[i] = value
-          if (rejectedPromises === promises.length) {
-            reject(new AggregateError(errors, "All promises were rejected"))
-          }
-        })
-      }
-    })
+      const results = [];
+      let resultCount = 0;
+
+      promiseArray.forEach((promise, index) => {
+        promise
+          .then((value) => {
+            resolve(value);
+          })
+          .catch((e) => {
+            resultCount++;
+            results[index] = value;
+
+            if (resultCount === promiseArray.length) {
+              reject(e);
+            }
+          });
+      });
+    });
   }
 }
+
+module.exports = MyPromise;
 
 class UncaughtPromiseError extends Error {
-  constructor(error) {
-    super(error)
-
-    this.stack = `(in promise) ${error.stack}`
+  constructor(value) {
+    super();
+    this.message = value;
+    this.stack = "in my promise: " + this.stack;
   }
 }
-
-module.exports = MyPromise
